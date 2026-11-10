@@ -8,6 +8,8 @@ import { Project, ProjectWithStats, deleteProject, listProjects } from "@/db/rep
 import ProjectFormModal from "@/components/ProjectFormModal";
 import { Chip, EmptyState, colors, formatDate, shadow } from "@/components/ui";
 import { useAlert } from "@/components/AlertContext";
+import { useGeoTransfer } from "@/components/useGeoTransfer";
+import { buildAllGeoJSON } from "@/lib/geojson";
 
 const logo = require("../../assets/logo-round.png");
 
@@ -20,6 +22,7 @@ export default function ProjectsScreen() {
   const [query, setQuery] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
+  const transfer = useGeoTransfer();
 
   const load = useCallback(() => {
     listProjects(db).then(setProjects);
@@ -77,6 +80,25 @@ export default function ProjectsScreen() {
           <Stat icon="clipboard-check-outline" value={String(totals.assessments)} label="Assessments" />
           <View style={styles.statDivider} />
           <Stat icon="pine-tree" value={totals.hectares.toFixed(2)} label="Hectares" />
+        </View>
+
+        <View style={styles.transferRow}>
+          <TouchableOpacity
+            style={styles.transferBtn}
+            disabled={transfer.busy}
+            onPress={() => transfer.importAsProjects(() => load())}
+          >
+            <MaterialCommunityIcons name="file-import-outline" size={17} color="#fff" />
+            <Text style={styles.transferText}>Import GeoJSON</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.transferBtn, !projects.length && { opacity: 0.5 }]}
+            disabled={transfer.busy || !projects.length}
+            onPress={() => transfer.exportGeoJSON(() => buildAllGeoJSON(db))}
+          >
+            <MaterialCommunityIcons name="file-export-outline" size={17} color="#fff" />
+            <Text style={styles.transferText}>Export All</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -220,6 +242,13 @@ const styles = StyleSheet.create({
   stat: { flex: 1, alignItems: "center", gap: 2 },
   statValue: { color: "#fff", fontSize: 18, fontWeight: "900" },
   statLabel: { color: "rgba(255,255,255,0.7)", fontSize: 10.5, fontWeight: "600" },
+  transferRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  transferBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  transferText: { color: "#fff", fontWeight: "700", fontSize: 12.5 },
   statDivider: { width: 1, height: 34, backgroundColor: "rgba(255,255,255,0.15)" },
   searchWrap: {
     flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 16, marginTop: -24,

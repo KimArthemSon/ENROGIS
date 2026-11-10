@@ -9,6 +9,8 @@ import {
 } from "./lib/sites";
 
 const REPO_URL = "https://github.com/KimArthemSon/ENROGIS";
+// Direct download of the latest Android build (GitHub release tag "ENRO").
+const APK_URL = `${REPO_URL}/releases/download/ENRO/ERNOGIS.apk`;
 const YEAR = new Date().getFullYear();
 
 type Toast = { kind: "ok" | "err"; text: string } | null;
@@ -344,6 +346,7 @@ export default function App() {
                 "GPS polygon recording with live hectare & perimeter",
                 "Satellite map with numbered boundary points",
                 "Geotagged photos saved to your gallery",
+                "GeoJSON export/import to sync with this web map",
               ].map((t) => (
                 <li key={t} className="flex items-start gap-2">
                   <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-teal-brand text-forest-900">
@@ -354,7 +357,7 @@ export default function App() {
               ))}
             </ul>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href={`${REPO_URL}/releases/latest`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 font-bold text-forest-700 shadow-lg hover:bg-forest-50">
+              <a href={APK_URL} download rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 font-bold text-forest-700 shadow-lg hover:bg-forest-50">
                 <Icon name="download" className="h-5 w-5" /> Download Android app
               </a>
               <a href={`${REPO_URL}/tree/main/mobile`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/40 px-5 py-3 font-bold hover:bg-white/10">
@@ -413,7 +416,7 @@ export default function App() {
         </div>
         <p className="mt-6 text-xs text-slate-500">
           Area and perimeter are geodesic (WGS 84 sphere, R = 6,378,137 m) — the same method Google Earth and Google Maps use.
-          Polygons are saved in this browser only; use GeoJSON export to back them up or move them to another computer.
+          Polygons are saved in this browser only; use GeoJSON export to back them up or move them to another computer. GeoJSON files exported from the ENROGIS mobile app can be imported here, and the other way around.
         </p>
       </section>
 

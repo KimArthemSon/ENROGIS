@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import MapView, { MapType, Marker, Polygon, Polyline } from "react-native-maps";
+import { WebView, WebViewMessageEvent } from "react-native-webview";
+import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ToastHost } from "@/components/AlertContext";
 import {
-  LatLng, formatArea, formatDistance, polygonAreaSqMeters, polygonCenter, polygonPerimeterMeters,
+  LatLng, distanceMeters, formatArea, formatDistance, polygonAreaSqMeters, polygonCenter, polygonPerimeterMeters,
 } from "@/lib/geo";
+import { buildMapHtml } from "@/lib/leafletHtml";
 
 export type MapPhoto = { key: string; latitude: number; longitude: number; label: string };
 
@@ -14,20 +16,32 @@ type Props = {
   points: LatLng[];
   photos?: MapPhoto[];
   siteLocation?: LatLng | null;
-  /** When given, the full-screen map offers "tap to add point". */
+  /** When given, the full-screen map offers "tap to add points". */
   onAddPoint?: (p: LatLng) => void;
 };
 
+type MapLayer = "hybrid" | "satellite" | "standard" | "terrain";
+const LAYERS: MapLayer[] = ["hybrid", "satellite", "standard", "terrain"];
 const ACCENT = "#0E8A6C";
-const PH_REGION = { latitude: 12.8797, longitude: 121.774, latitudeDelta: 12, longitudeDelta: 12 };
-const MAP_TYPES: MapType[] = ["hybrid", "satellite", "standard", "terrain"];
+
+// Built once; Leaflet is bundled inline so the map works offline.
+// react-native-webview's prop types collapse to `never` with React 19.3 types, so we
+// describe the props we use ourselves. Runtime behavior is unchanged.
+const RNWebView = WebView as unknown as React.ComponentType<
+  Record<string, unknown> & { ref?: React.Ref<WebView>; onMessage?: (e: WebViewMessageEvent) => void }
+>;
+
+const COMPACT_HTML = buildMapHtml(true);
+const FULL_HTML = buildMapHtml(false);
 
 export default function PolygonMap(props: Props) {
   const [fullscreen, setFullscreen] = useState(false);
   return (
     <View>
       <View style={styles.preview}>
-        <MapCanvas {...props} compact />
+        <LeafletCanvas {...props} compact layer="hybrid" />
+        {/* Catch taps so the small preview opens the big map instead of panning */}
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setFullscreen(true)} />
         <TouchableOpacity style={styles.expandBtn} onPress={() => setFullscreen(true)}>
           <Ionicons name="expand" size={16} color="#fff" />
           <Text style={styles.expandText}>Open Map</Text>
@@ -44,29 +58,58 @@ export default function PolygonMap(props: Props) {
 function FullscreenMap(props: Props & { onClose: () => void }) {
   const insets = useSafeAreaInsets();
   const [addMode, setAddMode] = useState(false);
-  const [mapType, setMapType] = useState<MapType>("hybrid");
+  const [layer, setLayer] = useState<MapLayer>("hybrid");
+  const [me, setMe] = useState<(LatLng & { accuracy: number | null }) | null>(null);
+  const canvas = useRef<CanvasHandle>(null);
   const area = polygonAreaSqMeters(props.points);
   const perim = polygonPerimeterMeters(props.points);
   const f = formatArea(area);
 
+  // Live "my location" dot while the big map is open (works offline).
+  useEffect(() => {
+    let sub: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    (async () => {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== "granted" || cancelled) return;
+      sub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 2 }, (l) =>
+        setMe({ latitude: l.coords.latitude, longitude: l.coords.longitude, accuracy: l.coords.accuracy ?? null }),
+      );
+      if (cancelled) sub.remove();
+    })().catch(() => {});
+    return () => {
+      cancelled = true;
+      sub?.remove();
+    };
+  }, []);
+
   return (
-    <View style={{ flex: 1 }}>
-      <MapCanvas
+    <View style={{ flex: 1, backgroundColor: "#0F172A" }}>
+      <LeafletCanvas
+        ref={canvas}
         {...props}
-        mapType={mapType}
-        onMapPress={addMode && props.onAddPoint ? props.onAddPoint : undefined}
+        layer={layer}
+        me={me}
+        addMode={addMode && !!props.onAddPoint}
+        onTap={props.onAddPoint}
       />
 
       <View style={[styles.topBar, { top: insets.top + 10 }]}>
         <TouchableOpacity style={styles.roundBtn} onPress={props.onClose}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.typeBtn}
-          onPress={() => setMapType(MAP_TYPES[(MAP_TYPES.indexOf(mapType) + 1) % MAP_TYPES.length])}
-        >
+        <TouchableOpacity style={styles.typeBtn} onPress={() => setLayer(LAYERS[(LAYERS.indexOf(layer) + 1) % LAYERS.length])}>
           <Ionicons name="layers" size={16} color="#fff" />
-          <Text style={styles.typeText}>{mapType}</Text>
+          <Text style={styles.typeText}>{layer}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={[styles.sideBtns, { top: insets.top + 64 }]}>
+        <TouchableOpacity style={styles.roundBtn} onPress={() => canvas.current?.fit()}>
+          <MaterialCommunityIcons name="fit-to-screen-outline" size={20} color="#fff" />
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.roundBtn, !me && { opacity: 0.5 }]} disabled={!me} onPress={() => me && canvas.current?.center(me)}>
+          <MaterialCommunityIcons name="crosshairs-gps" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
 
@@ -86,10 +129,7 @@ function FullscreenMap(props: Props & { onClose: () => void }) {
           </View>
         </View>
         {props.onAddPoint && (
-          <TouchableOpacity
-            style={[styles.addModeBtn, addMode && styles.addModeBtnOn]}
-            onPress={() => setAddMode((v) => !v)}
-          >
+          <TouchableOpacity style={[styles.addModeBtn, addMode && styles.addModeBtnOn]} onPress={() => setAddMode((v) => !v)}>
             <Ionicons name={addMode ? "hand-left" : "add-circle-outline"} size={16} color={addMode ? "#fff" : ACCENT} />
             <Text style={[styles.addModeText, addMode && { color: "#fff" }]}>
               {addMode ? "Tap the map to add points · Tap here to stop" : "Tap map to add points"}
@@ -101,88 +141,95 @@ function FullscreenMap(props: Props & { onClose: () => void }) {
   );
 }
 
-function MapCanvas({
-  points, photos = [], siteLocation, compact, mapType = "hybrid", onMapPress,
-}: Props & { compact?: boolean; mapType?: MapType; onMapPress?: (p: LatLng) => void }) {
-  const mapRef = useRef<MapView>(null);
+// ---------- WebView wrapper ----------
+
+type CanvasHandle = { fit: () => void; center: (p: LatLng) => void };
+
+type CanvasProps = Props & {
+  compact?: boolean;
+  layer: MapLayer;
+  me?: (LatLng & { accuracy: number | null }) | null;
+  addMode?: boolean;
+  onTap?: (p: LatLng) => void;
+};
+
+const LeafletCanvas = React.forwardRef<CanvasHandle, CanvasProps>(function LeafletCanvas(
+  { points, photos = [], siteLocation, compact, layer, me, addMode, onTap },
+  ref,
+) {
+  const web = useRef<WebView>(null);
   const [ready, setReady] = useState(false);
+  const onTapRef = useRef(onTap);
+  onTapRef.current = onTap;
 
-  const allCoords = useMemo(() => {
-    const c: LatLng[] = [...points];
-    if (siteLocation) c.push(siteLocation);
-    photos.forEach((p) => c.push(p));
-    return c;
-  }, [points, photos, siteLocation]);
+  // Shape changes re-fit the view in the preview; the big map keeps the user's zoom.
+  const shapeKey = JSON.stringify([points, photos.map((p) => p.key), siteLocation]);
+  const lastShape = useRef<string | null>(null);
 
-  // Zoom to fit everything whenever the shape changes.
+  const state = useMemo(() => {
+    const center = polygonCenter(points);
+    const n = points.length;
+    const edges =
+      !compact && n >= 2
+        ? Array.from({ length: n >= 3 ? n : 1 }, (_, i) => {
+            const a = points[i];
+            const b = points[(i + 1) % n];
+            return { lat: (a.latitude + b.latitude) / 2, lng: (a.longitude + b.longitude) / 2, text: formatDistance(distanceMeters(a, b)) };
+          })
+        : [];
+    return {
+      points,
+      photos: photos.map((p) => ({ latitude: p.latitude, longitude: p.longitude })),
+      site: siteLocation ?? null,
+      layer,
+      addMode: !!addMode,
+      me: me ?? null,
+      center,
+      edges,
+      areaLabel: n >= 3 ? formatArea(polygonAreaSqMeters(points)).hectares : null,
+    };
+  }, [points, photos, siteLocation, layer, addMode, me, compact]);
+
   useEffect(() => {
-    if (!ready || allCoords.length === 0) return;
-    if (allCoords.length === 1) {
-      mapRef.current?.animateToRegion({ ...allCoords[0], latitudeDelta: 0.004, longitudeDelta: 0.004 }, 300);
-    } else {
-      mapRef.current?.fitToCoordinates(allCoords, {
-        edgePadding: compact
-          ? { top: 30, right: 30, bottom: 30, left: 30 }
-          : { top: 120, right: 60, bottom: 220, left: 60 },
-        animated: true,
-      });
-    }
-  }, [ready, allCoords, compact]);
+    if (!ready) return;
+    const fit = compact ? lastShape.current !== shapeKey : lastShape.current === null;
+    lastShape.current = shapeKey;
+    web.current?.injectJavaScript(`window.__set(${JSON.stringify({ ...state, fit })}); true;`);
+  }, [ready, state, shapeKey, compact]);
 
-  const center = polygonCenter(points);
-  const area = polygonAreaSqMeters(points);
+  React.useImperativeHandle(ref, () => ({
+    fit: () => web.current?.injectJavaScript("window.__fit(); true;"),
+    center: (p) => web.current?.injectJavaScript(`window.__center(${p.latitude}, ${p.longitude}); true;`),
+  }));
+
+  const onMessage = (e: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(e.nativeEvent.data);
+      if (msg.type === "ready") setReady(true);
+      else if (msg.type === "tap") onTapRef.current?.({ latitude: Math.round(msg.lat * 1e7) / 1e7, longitude: Math.round(msg.lng * 1e7) / 1e7 });
+    } catch {}
+  };
 
   return (
-    <MapView
-      ref={mapRef}
+    <RNWebView
+      ref={web}
       style={StyleSheet.absoluteFill}
-      initialRegion={PH_REGION}
-      mapType={mapType}
-      showsUserLocation
-      showsMyLocationButton={!compact}
-      scrollEnabled={!compact}
-      zoomEnabled={!compact}
-      rotateEnabled={!compact}
-      pitchEnabled={false}
-      toolbarEnabled={false}
-      onMapReady={() => setReady(true)}
-      onPress={(e) => onMapPress?.(e.nativeEvent.coordinate)}
-    >
-      {points.length >= 3 && (
-        <Polygon coordinates={points} strokeColor="#FACC15" strokeWidth={3} fillColor="rgba(5,200,156,0.25)" />
-      )}
-      {points.length === 2 && <Polyline coordinates={points} strokeColor="#FACC15" strokeWidth={3} />}
-
-      {points.map((p, i) => (
-        <Marker key={`v-${i}-${p.latitude}-${p.longitude}`} coordinate={p} anchor={{ x: 0.5, y: 0.5 }} title={`Point ${i + 1}`}>
-          <View style={styles.vertex}>
-            <Text style={styles.vertexText}>{i + 1}</Text>
-          </View>
-        </Marker>
-      ))}
-
-      {photos.map((p) => (
-        <Marker key={p.key} coordinate={p} title={p.label} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={styles.photoPin}>
-            <Ionicons name="camera" size={11} color="#fff" />
-          </View>
-        </Marker>
-      ))}
-
-      {siteLocation && (
-        <Marker coordinate={siteLocation} title="Assessment location" pinColor="#0F4A2F" />
-      )}
-
-      {center && points.length >= 3 && (
-        <Marker coordinate={center} anchor={{ x: 0.5, y: 0.5 }} tappable={false}>
-          <View style={styles.areaLabel}>
-            <Text style={styles.areaLabelText}>{formatArea(area).hectares}</Text>
-          </View>
-        </Marker>
-      )}
-    </MapView>
+      originWhitelist={["*"]}
+      source={{ html: compact ? COMPACT_HTML : FULL_HTML, baseUrl: "https://enrogis.local/" }}
+      onMessage={onMessage}
+      javaScriptEnabled
+      domStorageEnabled
+      // Reuse map tiles already downloaded, so previously viewed areas show offline.
+      cacheEnabled
+      cacheMode="LOAD_CACHE_ELSE_NETWORK"
+      scrollEnabled={false}
+      overScrollMode="never"
+      setSupportMultipleWindows={false}
+      onContentProcessDidTerminate={() => web.current?.reload()}
+      onRenderProcessGone={() => web.current?.reload()}
+    />
   );
-}
+});
 
 const styles = StyleSheet.create({
   preview: { height: 240, borderRadius: 14, overflow: "hidden", backgroundColor: "#CBD5E1" },
@@ -191,16 +238,13 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(15,23,42,0.8)", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
   },
   expandText: { color: "#fff", fontWeight: "700", fontSize: 12 },
-  topBar: {
-    position: "absolute", left: 16, right: 16, flexDirection: "row", justifyContent: "space-between",
-  },
+  topBar: { position: "absolute", left: 16, right: 16, flexDirection: "row", justifyContent: "space-between" },
+  sideBtns: { position: "absolute", right: 16, gap: 10 },
   roundBtn: {
-    width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(15,23,42,0.8)",
-    justifyContent: "center", alignItems: "center",
+    width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(15,23,42,0.8)", justifyContent: "center", alignItems: "center",
   },
   typeBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(15,23,42,0.8)",
-    paddingHorizontal: 14, borderRadius: 21,
+    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(15,23,42,0.8)", paddingHorizontal: 14, borderRadius: 21,
   },
   typeText: { color: "#fff", fontWeight: "700", fontSize: 12, textTransform: "capitalize" },
   infoCard: {
@@ -216,18 +260,4 @@ const styles = StyleSheet.create({
   },
   addModeBtnOn: { backgroundColor: ACCENT },
   addModeText: { color: ACCENT, fontWeight: "700", fontSize: 12 },
-  vertex: {
-    width: 24, height: 24, borderRadius: 12, backgroundColor: ACCENT, borderWidth: 2, borderColor: "#fff",
-    justifyContent: "center", alignItems: "center",
-  },
-  vertexText: { color: "#fff", fontSize: 11, fontWeight: "800" },
-  photoPin: {
-    width: 20, height: 20, borderRadius: 10, backgroundColor: "#0369A1", borderWidth: 2, borderColor: "#fff",
-    justifyContent: "center", alignItems: "center",
-  },
-  areaLabel: {
-    backgroundColor: "rgba(15,23,42,0.85)", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
-    borderWidth: 1, borderColor: "#FACC15",
-  },
-  areaLabelText: { color: "#FACC15", fontWeight: "800", fontSize: 13 },
 });

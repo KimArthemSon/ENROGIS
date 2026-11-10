@@ -11,6 +11,8 @@ import ProjectFormModal from "@/components/ProjectFormModal";
 import { Chip, EmptyState, colors, formatDate, shadow } from "@/components/ui";
 import { useAlert } from "@/components/AlertContext";
 import { formatDistance } from "@/lib/geo";
+import { useGeoTransfer } from "@/components/useGeoTransfer";
+import { buildProjectGeoJSON } from "@/lib/geojson";
 
 export default function ProjectScreen() {
   const { projectId } = useLocalSearchParams<{ projectId: string }>();
@@ -22,6 +24,7 @@ export default function ProjectScreen() {
   const [project, setProject] = useState<Project | null>(null);
   const [items, setItems] = useState<AssessmentListItem[]>([]);
   const [editOpen, setEditOpen] = useState(false);
+  const transfer = useGeoTransfer();
 
   const load = useCallback(() => {
     getProject(db, id).then(setProject);
@@ -99,6 +102,21 @@ export default function ProjectScreen() {
               <Summary icon="clipboard-check-outline" color={colors.primary} bg={colors.tealSoft} value={String(items.length)} label="Assessments" />
               <Summary icon="vector-square" color={colors.bark} bg={colors.barkSoft} value={(totalArea / 10000).toFixed(2)} label="Hectares" />
               <Summary icon="camera-outline" color={colors.water} bg={colors.waterSoft} value={String(totalPhotos)} label="Photos" />
+            </View>
+
+            <View style={styles.transferRow}>
+              <TouchableOpacity style={styles.transferBtn} disabled={transfer.busy} onPress={() => transfer.importIntoProject(id, load)}>
+                <MaterialCommunityIcons name="file-import-outline" size={17} color={colors.primary} />
+                <Text style={styles.transferText}>Import GeoJSON</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.transferBtn, !items.length && { opacity: 0.5 }]}
+                disabled={transfer.busy || !items.length}
+                onPress={() => transfer.exportGeoJSON(() => buildProjectGeoJSON(db, id))}
+              >
+                <MaterialCommunityIcons name="file-export-outline" size={17} color={colors.primary} />
+                <Text style={styles.transferText}>Export GeoJSON</Text>
+              </TouchableOpacity>
             </View>
 
             {items.length > 0 && <Text style={styles.sectionLabel}>Assessments</Text>}
@@ -197,6 +215,12 @@ const styles = StyleSheet.create({
   sumIcon: { width: 34, height: 34, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 2 },
   sumValue: { color: colors.text, fontWeight: "900", fontSize: 17 },
   sumLabel: { color: colors.muted, fontSize: 10.5, fontWeight: "600" },
+  transferRow: { flexDirection: "row", gap: 10, marginHorizontal: 16, marginTop: 12 },
+  transferBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 11,
+    borderRadius: 12, borderWidth: 1.5, borderColor: colors.tealSoft, backgroundColor: "#fff",
+  },
+  transferText: { color: colors.primary, fontWeight: "800", fontSize: 12.5 },
   sectionLabel: {
     fontSize: 12, fontWeight: "800", color: colors.muted, letterSpacing: 0.6, textTransform: "uppercase",
     marginHorizontal: 20, marginTop: 22, marginBottom: 10,

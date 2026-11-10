@@ -25,6 +25,8 @@ export type Assessment = {
   accuracy: number | null;
   area_sqm: number;
   perimeter_m: number;
+  /** JSON of extra GeoJSON properties from imports (refNo, barangay, status, color…). */
+  meta: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -135,6 +137,8 @@ export type AssessmentInput = {
   perimeter_m: number;
   points: PolygonPoint[];
   photos: Photo[];
+  /** Only used when creating (imports). Edits keep the existing value. */
+  meta?: string | null;
 };
 
 /** Saves the assessment with all its points and photos in one transaction. */
@@ -159,9 +163,9 @@ export async function saveAssessment(db: SQLiteDatabase, input: AssessmentInput)
     } else {
       const res = await db.runAsync(
         `INSERT INTO assessments (project_id, title, remarks, latitude, longitude,
-           accuracy, area_sqm, perimeter_m, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        input.project_id, ...fields, ts, ts,
+           accuracy, area_sqm, perimeter_m, meta, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.project_id, ...fields, input.meta ?? null, ts, ts,
       );
       id = res.lastInsertRowId;
     }
@@ -215,4 +219,19 @@ export async function deleteAssessment(db: SQLiteDatabase, id: number) {
 
 export function markPhotoSavedToGallery(db: SQLiteDatabase, id: number) {
   return db.runAsync("UPDATE photos SET saved_to_gallery = 1 WHERE id = ?", id);
+}
+
+/** Assessments of a project with their polygon points, for GeoJSON export. */
+export async function listAssessmentsWithPoints(db: SQLiteDatabase, projectId: number) {
+  const items = await db.getAllAsync<Assessment>(
+    "SELECT * FROM assessments WHERE project_id = ? ORDER BY created_at", projectId,
+  );
+  const out: { assessment: Assessment; points: PolygonPoint[] }[] = [];
+  for (const a of items) {
+    const points = await db.getAllAsync<PolygonPoint>(
+      "SELECT * FROM polygon_points WHERE assessment_id = ? ORDER BY seq", a.id,
+    );
+    out.push({ assessment: a, points });
+  }
+  return out;
 }

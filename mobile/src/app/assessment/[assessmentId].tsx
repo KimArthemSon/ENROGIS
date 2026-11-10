@@ -21,6 +21,8 @@ import {
   GpsFix, GpsReadiness, checkGpsReadiness, formatAge, getGpsFix, gpsErrorMessage, GPS_LIVE_TIMEOUT_MS,
 } from "@/lib/gps";
 import { deleteLocalPhotoFile, persistPhoto, saveToGallery, sharePhoto } from "@/lib/photos";
+import { useGeoTransfer } from "@/components/useGeoTransfer";
+import { buildAssessmentGeoJSON } from "@/lib/geojson";
 
 const MAX_POLYGON_POINTS = 100;
 const MIN_POLYGON_POINTS = 3;
@@ -441,6 +443,14 @@ export default function AssessmentForm() {
     );
   };
 
+  // ---------- GeoJSON export (for the ENROGIS web map) ----------
+  const transfer = useGeoTransfer();
+  const handleExport = () => {
+    if (assessmentId === null) return;
+    if (dirty) return warning("Save First", "Save your changes, then export so the file has the latest polygon.");
+    transfer.exportGeoJSON(() => buildAssessmentGeoJSON(db, projectId, assessmentId));
+  };
+
   // ---------- Render ----------
   if (loading) {
     return (
@@ -458,9 +468,14 @@ export default function AssessmentForm() {
           title: assessmentId ? "Edit Assessment" : "New Assessment",
           headerRight: assessmentId
             ? () => (
-                <TouchableOpacity onPress={handleDelete} hitSlop={8}>
-                  <Ionicons name="trash-outline" size={20} color="#FCA5A5" />
-                </TouchableOpacity>
+                <View style={{ flexDirection: "row", gap: 18 }}>
+                  <TouchableOpacity onPress={handleExport} hitSlop={8} disabled={transfer.busy}>
+                    <MaterialCommunityIcons name="file-export-outline" size={22} color="#fff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleDelete} hitSlop={8}>
+                    <Ionicons name="trash-outline" size={20} color="#FCA5A5" />
+                  </TouchableOpacity>
+                </View>
               )
             : undefined,
         }}

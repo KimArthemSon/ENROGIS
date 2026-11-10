@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 
 /** Runs once on app start (via SQLiteProvider onInit) and upgrades the schema. */
 export async function migrateDb(db: SQLiteDatabase) {
@@ -64,7 +64,13 @@ export async function migrateDb(db: SQLiteDatabase) {
     version = 1;
   }
 
-  // Future migrations go here: if (version === 1) { ...; version = 2; }
+  if (version === 1) {
+    // Extra GeoJSON properties (refNo, barangay, status, color…) kept so web ↔ mobile round-trips lose nothing.
+    await db.execAsync("ALTER TABLE assessments ADD COLUMN meta TEXT;");
+    version = 2;
+  }
+
+  // Future migrations go here: if (version === 2) { ...; version = 3; }
 
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}`);
 }
